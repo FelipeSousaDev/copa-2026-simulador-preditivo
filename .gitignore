@@ -1,0 +1,11 @@
+# Ambientes Virtuais
+venv/
+.env
+
+# Python Cache
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Arquivos locais do Power BI (opcional, caso fique muito pesado)
+# *.pbix
