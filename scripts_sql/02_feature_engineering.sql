@@ -102,3 +102,60 @@ GO
 
 PRINT '✅ Tarefa 2.1 Concluída: vw_dados_treinamento gerada com features matemáticas.';
 GO
+
+-- ==============================================================================
+-- SPRINT 2: TAREFA 2.2 - VIEW DE HISTÓRICO DE CONFRONTO DIRETO (CORRIGIDA)
+-- ==============================================================================
+
+USE DB_COPA_2026;
+GO
+
+DROP VIEW IF EXISTS vw_confronto_direto;
+GO
+
+CREATE VIEW vw_confronto_direto AS
+SELECT 
+    p_atual.ID_PARTIDA,
+    p_atual.DATA_PARTIDA,
+    p_atual.ID_SELECAO_MANDANTE,
+    p_atual.ID_SELECAO_VISITANTE,
+    
+    -- 1. Total de confrontos históricos entre as duas equipes antes da data atual
+    ISNULL((
+        SELECT COUNT(*) 
+        FROM fato_partidas p_antiga
+        WHERE p_antiga.DATA_PARTIDA < p_atual.DATA_PARTIDA
+          AND (
+                (p_antiga.ID_SELECAO_MANDANTE = p_atual.ID_SELECAO_MANDANTE AND p_antiga.ID_SELECAO_VISITANTE = p_atual.ID_SELECAO_VISITANTE) OR
+                (p_antiga.ID_SELECAO_MANDANTE = p_atual.ID_SELECAO_VISITANTE AND p_antiga.ID_SELECAO_VISITANTE = p_atual.ID_SELECAO_MANDANTE)
+              )
+    ), 0) AS HISTORICO_CONFRONTOS_TOTAIS,
+    
+    -- 2. Total de vitórias que o Mandante Atual teve sobre o Visitante Atual no passado
+    ISNULL((
+        SELECT COUNT(*) 
+        FROM fato_partidas p_antiga
+        WHERE p_antiga.DATA_PARTIDA < p_atual.DATA_PARTIDA
+          AND (
+                (p_antiga.ID_SELECAO_MANDANTE = p_atual.ID_SELECAO_MANDANTE AND p_antiga.ID_SELECAO_VISITANTE = p_atual.ID_SELECAO_VISITANTE AND p_antiga.GOLS_MANDANTE > p_antiga.GOLS_VISITANTE) OR
+                (p_antiga.ID_SELECAO_VISITANTE = p_atual.ID_SELECAO_MANDANTE AND p_antiga.ID_SELECAO_MANDANTE = p_atual.ID_SELECAO_VISITANTE AND p_antiga.GOLS_VISITANTE > p_antiga.GOLS_MANDANTE)
+              )
+    ), 0) AS HISTORICO_VITORIAS_MANDANTE,
+    
+    -- 3. Total de vitórias que o Visitante Atual teve sobre o Mandante Atual no passado
+    ISNULL((
+        SELECT COUNT(*) 
+        FROM fato_partidas p_antiga
+        WHERE p_antiga.DATA_PARTIDA < p_atual.DATA_PARTIDA
+          AND (
+                (p_antiga.ID_SELECAO_MANDANTE = p_atual.ID_SELECAO_VISITANTE AND p_antiga.ID_SELECAO_VISITANTE = p_atual.ID_SELECAO_MANDANTE AND p_antiga.GOLS_MANDANTE > p_antiga.GOLS_VISITANTE) OR
+                (p_antiga.ID_SELECAO_VISITANTE = p_atual.ID_SELECAO_VISITANTE AND p_antiga.ID_SELECAO_MANDANTE = p_atual.ID_SELECAO_MANDANTE AND p_antiga.GOLS_VISITANTE > p_antiga.GOLS_MANDANTE)
+              )
+    ), 0) AS HISTORICO_VITORIAS_VISITANTE
+
+FROM fato_partidas p_atual
+WHERE YEAR(p_atual.DATA_PARTIDA) >= 2014;
+GO
+
+PRINT '✅ Tarefa 2.2 Concluída: Mapeamento de confronto direto (Head-to-Head) consolidado.';
+GO
