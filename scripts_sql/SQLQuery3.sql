@@ -1,58 +1,104 @@
--- =========================================================
--- SPRINT 1: TAREFA 1.3 - CRIA��O DA FATO DE PARTIDAS
--- =========================================================
+﻿-- ==============================================================================
+-- SPRINT 2: TAREFA 2.1 - VIEW DE FEATURES COMPORTAMENTAIS PARA MACHINE LEARNING
+-- ==============================================================================
 
--- 1. Garante a limpeza do ambiente antes da cria��o
-DROP TABLE IF EXISTS fato_partidas;
+USE DB_COPA_2026;
 GO
 
--- 2. Cria��o da estrutura da tabela Fato com integridade referencial
-CREATE TABLE fato_partidas (
-    ID_PARTIDA INT IDENTITY(1,1) PRIMARY KEY,
-    DATA_PARTIDA DATE NOT NULL,
-    ID_SELECAO_MANDANTE INT NOT NULL,
-    ID_SELECAO_VISITANTE INT NOT NULL,
-    GOLS_MANDANTE INT NULL,
-    GOLS_VISITANTE INT NULL,
-    NOME_TORNEIO VARCHAR(100) NOT NULL,
-    PESO_COMPETICAO INT NOT NULL,
+DROP VIEW IF EXISTS vw_dados_treinamento;
+GO
+
+CREATE VIEW vw_dados_treinamento AS
+WITH CTE_Base_Partidas AS (
+    SELECT 
+        p.ID_PARTIDA,
+        p.DATA_PARTIDA,
+        p.ID_SELECAO_MANDANTE,
+        p.ID_SELECAO_VISITANTE,
+        p.GOLS_MANDANTE,
+        p.GOLS_VISITANTE,
+        p.PESO_COMPETICAO,
+        
+        -- Alvo da IA (Target): 2 = Vitória Mandante, 1 = Empate, 0 = Vitória Visitante
+        CASE 
+            WHEN p.GOLS_MANDANTE > p.GOLS_VISITANTE THEN 2
+            WHEN p.GOLS_MANDANTE = p.GOLS_VISITANTE THEN 1
+            ELSE 0 
+        END AS TARGET_RESULTADO,
+
+        -- Define o semestre da partida para acoplamento com a granularidade do ranking
+        CASE WHEN MONTH(p.DATA_PARTIDA) <= 6 THEN 1 ELSE 2 END AS SEMESTRE_PARTIDA,
+        YEAR(p.DATA_PARTIDA) AS ANO_PARTIDA
+    FROM fato_partidas p
+),
+
+CTE_Rankings_Calculados AS (
+    SELECT 
+        bp.*,
+        -- Extração de pontos da FIFA usando a convenção de colunas com caracteres especiais [total.points]
+        ISNULL(r_man.[total.points], 0) AS PONTOS_FIFA_MANDANTE,
+        ISNULL(r_vis.[total.points], 0) AS PONTOS_FIFA_VISITANTE
+    FROM CTE_Base_Partidas bp
     
-    -- Defini��o das Restri��es de Chave Estrangeira (FK)
-    FOREIGN KEY (ID_SELECAO_MANDANTE) REFERENCES dim_selecoes(ID_SELECAO),
-    FOREIGN KEY (ID_SELECAO_VISITANTE) REFERENCES dim_selecoes(ID_SELECAO)
-);
-GO
-
--- 3. Carga de dados associando chaves textuais aos IDs num�ricos
-INSERT INTO fato_partidas (
-    DATA_PARTIDA, 
-    ID_SELECAO_MANDANTE, 
-    ID_SELECAO_VISITANTE, 
-    GOLS_MANDANTE, 
-    GOLS_VISITANTE, 
-    NOME_TORNEIO, 
-    PESO_COMPETICAO
+    -- Associação de Ranking do Mandante pelo Ano e Semestre correspondentes
+    LEFT JOIN stg_ranking_fifa r_man 
+        ON r_man.team = (SELECT NOME_SELECAO FROM dim_selecoes WHERE ID_SELECAO = bp.ID_SELECAO_MANDANTE)
+        AND r_man.date = bp.ANO_PARTIDA
+        AND r_man.semester = bp.SEMESTRE_PARTIDA
+        
+    -- Associação de Ranking do Visitante pelo Ano e Semestre correspondentes
+    LEFT JOIN stg_ranking_fifa r_vis 
+        ON r_vis.team = (SELECT NOME_SELECAO FROM dim_selecoes WHERE ID_SELECAO = bp.ID_SELECAO_VISITANTE)
+        AND r_vis.date = bp.ANO_PARTIDA
+        AND r_vis.semester = bp.SEMESTRE_PARTIDA
 )
-SELECT 
-    CAST(p.date AS DATE) AS DATA_PARTIDA,
-    dm.ID_SELECAO AS ID_SELECAO_MANDANTE,
-    dv.ID_SELECAO AS ID_SELECAO_VISITANTE,
-    CAST(p.home_score AS INT) AS GOLS_MANDANTE,
-    CAST(p.away_score AS INT) AS GOLS_VISITANTE,
-    p.tournament AS NOME_TORNEIO,
-    
-    -- REGRA DE NEG�CIO COMPREENSIVA DE PESO COMPETITIVO
-    CASE 
-        WHEN p.tournament = 'Friendly' THEN 1
-        WHEN p.tournament = 'FIFA World Cup' THEN 3
-        ELSE 2 -- Qualifiers, Euro, Copa Am�rica, etc.
-    END AS PESO_COMPETICAO
 
-FROM stg_partidas_internacionais p
--- Primeiro JOIN para buscar o ID do Mandante
-INNER JOIN dim_selecoes dm ON TRIM(p.home_team) = dm.NOME_SELECAO
--- Segundo JOIN (Alias diferente) para buscar o ID do Visitante
-INNER JOIN dim_selecoes dv ON TRIM(p.away_team) = dv.NOME_SELECAO
--- Data Quality: Ignora registros de jogos futuros ou sem placar preenchido
-WHERE p.home_score IS NOT NULL AND p.away_score IS NOT NULL;
+SELECT 
+    rc.ID_PARTIDA,
+    rc.DATA_PARTIDA,
+    rc.ID_SELECAO_MANDANTE,
+    rc.ID_SELECAO_VISITANTE,
+    rc.PESO_COMPETICAO,
+    rc.TARGET_RESULTADO,
+    
+    -- FEATURE 1: Força Relativa (Valores positivos indicam favoritismo técnico do Mandante)
+    (rc.PONTOS_FIFA_MANDANTE - rc.PONTOS_FIFA_VISITANTE) AS DELTA_RANKING_PONTOS,
+
+    -- FEATURE 2: Média Móvel de Gols Marcados pelo Mandante (Últimos 24 meses)
+    ISNULL(hist_man.GOLS_MARCADOS_24M, 0) AS MED_GOLS_MARCADOS_MANDANTE,
+
+    -- FEATURE 3: Média Móvel de Gols Marcados pelo Visitante (Últimos 24 meses)
+    ISNULL(hist_vis.GOLS_MARCADOS_24M, 0) AS MED_GOLS_MARCADOS_VISITANTE
+
+FROM CTE_Rankings_Calculados rc
+
+-- Janela de Cálculo para o Mandante (Varre jogos como mandante ou visitante nos últimos 24 meses)
+CROSS APPLY (
+    SELECT AVG(CAST(Gols_Marcados AS DECIMAL(5,2))) AS GOLS_MARCADOS_24M
+    FROM (
+        SELECT GOLS_MANDANTE AS Gols_Marcados FROM fato_partidas 
+        WHERE ID_SELECAO_MANDANTE = rc.ID_SELECAO_MANDANTE AND DATA_PARTIDA < rc.DATA_PARTIDA AND DATA_PARTIDA >= DATEADD(MONTH, -24, rc.DATA_PARTIDA)
+        UNION ALL
+        SELECT GOLS_VISITANTE AS Gols_Marcados FROM fato_partidas 
+        WHERE ID_SELECAO_VISITANTE = rc.ID_SELECAO_MANDANTE AND DATA_PARTIDA < rc.DATA_PARTIDA AND DATA_PARTIDA >= DATEADD(MONTH, -24, rc.DATA_PARTIDA)
+    ) AS sub_man
+) hist_man
+
+-- Janela de Cálculo para o Visitante (Varre jogos como mandante ou visitante nos últimos 24 meses)
+CROSS APPLY (
+    SELECT AVG(CAST(Gols_Marcados AS DECIMAL(5,2))) AS GOLS_MARCADOS_24M
+    FROM (
+        SELECT GOLS_MANDANTE AS Gols_Marcados FROM fato_partidas 
+        WHERE ID_SELECAO_MANDANTE = rc.ID_SELECAO_VISITANTE AND DATA_PARTIDA < rc.DATA_PARTIDA AND DATA_PARTIDA >= DATEADD(MONTH, -24, rc.DATA_PARTIDA)
+        UNION ALL
+        SELECT GOLS_VISITANTE AS Gols_Marcados FROM fato_partidas 
+        WHERE ID_SELECAO_VISITANTE = rc.ID_SELECAO_VISITANTE AND DATA_PARTIDA < rc.DATA_PARTIDA AND DATA_PARTIDA >= DATEADD(MONTH, -24, rc.DATA_PARTIDA)
+    ) AS sub_vis
+) hist_vis
+
+-- CORTE CRONOLÓGICO DA LINHA DE BASE: Filtra apenas futebol moderno para o treinamento da IA
+WHERE YEAR(rc.DATA_PARTIDA) >= 2014;
+GO
+
+PRINT '✅ Tarefa 2.1 Concluída: vw_dados_treinamento gerada com features matemáticas.';
 GO

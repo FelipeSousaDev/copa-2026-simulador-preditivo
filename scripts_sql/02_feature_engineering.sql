@@ -159,3 +159,42 @@ GO
 
 PRINT '✅ Tarefa 2.2 Concluída: Mapeamento de confronto direto (Head-to-Head) consolidado.';
 GO
+
+-- ==============================================================================
+-- SPRINT 2: TAREFA 2.3 - CONSOLIDAÇÃO DA VISÃO MASTER DE TREINAMENTO (ABT)
+-- ==============================================================================
+
+USE DB_COPA_2026;
+GO
+
+DROP VIEW IF EXISTS vw_abt_modelo_copa;
+GO
+
+CREATE VIEW vw_abt_modelo_copa AS
+SELECT 
+    -- Chaves e Contexto
+    t.ID_PARTIDA,
+    t.DATA_PARTIDA,
+    t.ID_SELECAO_MANDANTE,
+    t.ID_SELECAO_VISITANTE,
+    t.PESO_COMPETICAO,
+    
+    -- Features de Momento (Ranking e Gols Recentes)
+    t.DELTA_RANKING_PONTOS,
+    t.MED_GOLS_MARCADOS_MANDANTE,
+    t.MED_GOLS_MARCADOS_VISITANTE,
+    
+    -- Features de Histórico e "Camisa" (Head-to-Head)
+    cd.HISTORICO_CONFRONTOS_TOTAIS,
+    cd.HISTORICO_VITORIAS_MANDANTE,
+    cd.HISTORICO_VITORIAS_VISITANTE,
+    
+    -- Variável Alvo (O que a IA vai tentar adivinhar)
+    t.TARGET_RESULTADO
+
+FROM vw_dados_treinamento t
+INNER JOIN vw_confronto_direto cd ON t.ID_PARTIDA = cd.ID_PARTIDA;
+GO
+
+PRINT '✅ Tarefa 2.3 Concluída: ABT (Analytical Base Table) consolidada e pronta para o Python.';
+GO
